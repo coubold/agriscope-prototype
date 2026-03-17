@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Estimación de Oportunidad</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body,#root{width:100%;height:100%;background:#F5F5F5;font-family:'Inter',sans-serif;color:#1A1A1A}
+  .dark-tt{background:#fff!important;border:1px solid #E0E0E0!important;border-radius:8px!important;padding:8px 12px!important;box-shadow:0 4px 12px rgba(0,0,0,0.1)!important;color:#1A1A1A!important;font-family:'Inter',sans-serif}
+  .dark-tt::before,.dark-tt::after{border-top-color:#E0E0E0!important}
+  .leaflet-control-zoom a{background:#fff!important;color:#1B7A4B!important;border-color:#E0E0E0!important}
+  .leaflet-control-zoom a:hover{background:#F0F9F4!important;color:#145C38!important}
+  .leaflet-control-attribution{background:rgba(255,255,255,0.85)!important;color:#999!important;font-size:9px!important}
+  .leaflet-control-attribution a{color:#1B7A4B!important}
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#F5F5F5;color:#1B7A4B;font-family:'Inter',sans-serif;font-size:14px;z-index:9999;flex-direction:column;gap:12px}
+  #loading .spinner{width:32px;height:32px;border:3px solid #E0E0E0;border-top-color:#1B7A4B;border-radius:50%;animation:spin 0.8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #err{position:fixed;inset:0;background:#FFF5F5;color:#C0392B;font-family:monospace;font-size:13px;padding:40px;white-space:pre-wrap;overflow:auto;z-index:99999;display:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="loading"><div class="spinner"></div>Cargando…</div>
+<div id="err"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script type="module">
+try {
+  var ls = document.getElementById('loading');
+  ls.lastElementChild.textContent = 'Cargando dependencias…';
+  var [reactMod, reactDomMod, rechartsMod] = await Promise.all([
+    import('https://esm.sh/react@18.2.0'),
+    import('https://esm.sh/react-dom@18.2.0'),
+    import('https://esm.sh/recharts@2.12.7?deps=react@18.2.0,react-dom@18.2.0')
+  ]);
+  window.React = reactMod.default || reactMod;
+  window.ReactDOM = reactDomMod;
+  window.Recharts = rechartsMod;
+  if (!window.Recharts.BarChart) throw new Error('Recharts BarChart missing');
+  ls.lastElementChild.textContent = 'Compilando…';
+  await new Promise(function(r,j){ var s=document.createElement('script'); s.src='https://unpkg.com/@babel/standalone@7.24.0/babel.min.js'; s.onload=r; s.onerror=function(){j(new Error('Babel load fail'));}; document.head.appendChild(s); });
+  var code = document.getElementById('app-source').textContent;
+  var compiled = Babel.transform(code, { presets: ['react'] }).code;
+  new Function(compiled)();
+} catch(e) { var el=document.getElementById('err'); el.style.display='block'; el.textContent=e.message+'\n\n'+(e.stack||''); }
+</script>
+
+<script id="app-source" type="text/plain">
+var React=window.React, ReactDOM=window.ReactDOM, L=window.L, RR=window.Recharts;
+var useState=React.useState, useMemo=React.useMemo, useCallback=React.useCallback, useEffect=React.useEffect, useRef=React.useRef;
+var BarChart=RR.BarChart,Bar=RR.Bar,XAxis=RR.XAxis,YAxis=RR.YAxis,Tooltip=RR.Tooltip,ResponsiveContainer=RR.ResponsiveContainer,LineChart=RR.LineChart,Line=RR.Line,CartesianGrid=RR.CartesianGrid,Legend=RR.Legend,AreaChart=RR.AreaChart,Area=RR.Area,PieChart=RR.PieChart,Pie=RR.Pie,Cell=RR.Cell;
+
+var CROPS=["Soja","Maíz","Trigo","Girasol","Sorgo"];
+var CAMPAIGNS=["20/21","21/22","22/23","23/24","24/25","25/26 (est.)"];
+var CC={Soja:"#1B7A4B","Maíz":"#E6A817",Trigo:"#C4956A",Girasol:"#E8913A",Sorgo:"#8B6B4A"};
+var CI={Soja:"\u{1FAD8}","Maíz":"\u{1F33D}",Trigo:"\u{1F33E}",Girasol:"\u{1F33B}",Sorgo:"\u{1F33F}"};
+
+var PROVINCES=[
+  {id:"BA",name:"Buenos Aires",lat:-36.6,lng:-60.0},{id:"CBA",name:"Córdoba",lat:-31.4,lng:-64.2},
+  {id:"SF",name:"Santa Fe",lat:-31.6,lng:-60.7},{id:"ER",name:"Entre Ríos",lat:-32.0,lng:-59.2},
+  {id:"LP",name:"La Pampa",lat:-36.6,lng:-65.5},{id:"SL",name:"San Luis",lat:-33.3,lng:-66.3},
+  {id:"SGO",name:"Santiago del Estero",lat:-27.8,lng:-64.3},{id:"TUC",name:"Tucumán",lat:-26.8,lng:-65.2},
+  {id:"CHA",name:"Chaco",lat:-27.4,lng:-59.0},{id:"SAL",name:"Salta",lat:-24.8,lng:-65.4}
+];
+var ESTS={
+  BA:[{id:"ba1",name:"Est. Los Alamos",ha:2400,lat:-35.8,lng:-59.5},{id:"ba2",name:"Est. San Martín",ha:1800,lat:-37.2,lng:-60.8},{id:"ba3",name:"Est. La Esperanza",ha:3200,lat:-36.1,lng:-61.2}],
+  CBA:[{id:"cb1",name:"Est. El Porvenir",ha:4100,lat:-31.8,lng:-63.5},{id:"cb2",name:"Est. Bella Vista",ha:2700,lat:-32.5,lng:-64.8}],
+  SF:[{id:"sf1",name:"Est. Santa Rosa",ha:1950,lat:-31.2,lng:-61.0},{id:"sf2",name:"Est. Don Pedro",ha:3600,lat:-32.0,lng:-60.2}],
+  ER:[{id:"er1",name:"Est. La Calandria",ha:2100,lat:-32.2,lng:-58.8}],
+  LP:[{id:"lp1",name:"Est. Pampa Grande",ha:5200,lat:-36.4,lng:-65.0}],
+  SL:[{id:"sl1",name:"Est. Sierra Norte",ha:1500,lat:-33.0,lng:-66.0}],
+  SGO:[{id:"sg1",name:"Est. El Quebracho",ha:8500,lat:-28.0,lng:-64.0}],
+  TUC:[{id:"tu1",name:"Est. Tucumano",ha:1200,lat:-27.0,lng:-65.5}],
+  CHA:[{id:"ch1",name:"Est. Chaco Norte",ha:6000,lat:-27.2,lng:-59.5}],
+  SAL:[{id:"sa1",name:"Est. Salteño",ha:4800,lat:-25.0,lng:-65.0}]
+};
+
+function srand(seed){var s=seed;return function(){s=(s*16807)%2147483647;return(s-1)/2147483646;};}
+function genData(id,sc){
+  sc=sc||1;var rng=srand(id.split("").reduce(function(a,c){return a+c.charCodeAt(0);},0));var b={};
+  CROPS.forEach(function(crop){var bH=(rng()*40000+5000)*sc;var bY=crop==="Soja"?2.8:crop==="Maíz"?8.5:crop==="Trigo"?3.2:crop==="Girasol"?2.0:4.5;var bP=crop==="Soja"?320:crop==="Maíz"?180:crop==="Trigo"?250:crop==="Girasol"?380:160;
+    b[crop]=CAMPAIGNS.map(function(camp,i){var t=1+(i*0.03),v=0.85+rng()*0.3;var ha=Math.round(bH*t*v);var yld=+(bY*(0.8+rng()*0.4)*t).toFixed(1);var price=Math.round(bP*(0.85+rng()*0.3));return{campaign:camp,ha:ha,yield:yld,price:price,value:Math.round(ha*yld*price/1e6),isFuture:i>=5};});
+  });return b;
+}
+var countryData=genData("ARG",100);var provCache={};PROVINCES.forEach(function(p){provCache[p.id]=genData(p.id,10);});var estCache={};Object.entries(ESTS).forEach(function(e){e[1].forEach(function(x){estCache[x.id]=genData(x.id,0.3);});});
+
+/* ─── MAP ─── */
+function MapView(props){
+  var level=props.level,selProv=props.selectedProvince,selEst=props.selectedEst;
+  var onProv=props.onSelectProvince,onEst=props.onSelectEstablishment;
+  var mapRef=useRef(null),mapI=useRef(null),marks=useRef([]);
+  useEffect(function(){
+    if(!mapRef.current||mapI.current)return;
+    var map=L.map(mapRef.current,{center:[-33.5,-63],zoom:5,zoomControl:false,attributionControl:false});
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",{maxZoom:18}).addTo(map);
+    L.control.zoom({position:"bottomright"}).addTo(map);
+    mapI.current=map;setTimeout(function(){map.invalidateSize();},300);
+    return function(){map.remove();mapI.current=null;};
+  },[]);
+  useEffect(function(){
+    var map=mapI.current;if(!map)return;marks.current.forEach(function(m){map.removeLayer(m);});marks.current=[];
+    PROVINCES.forEach(function(prov){
+      var isSel=selProv&&selProv.id===prov.id;var ests=ESTS[prov.id]||[];var tH=ests.reduce(function(a,e){return a+e.ha;},0);
+      var m=L.circleMarker([prov.lat,prov.lng],{radius:isSel?12:8,fillColor:isSel?"#1B7A4B":"#4CAF50",color:isSel?"#145C38":"#1B7A4B",weight:isSel?3:1.5,opacity:1,fillOpacity:isSel?0.9:0.65}).addTo(map);
+      m.bindTooltip('<div style="font-size:12px;font-weight:600;color:#1A1A1A;margin-bottom:2px">'+prov.name+'</div><div style="font-size:10px;color:#666">'+ests.length+' establec. \u00b7 '+tH.toLocaleString()+' ha</div>',{direction:"top",offset:[0,-10],className:"dark-tt"});
+      m.on("click",function(){onProv(prov);});marks.current.push(m);
+    });
+    if(level!=="country"&&selProv){(ESTS[selProv.id]||[]).forEach(function(est){
+      var isSE=selEst&&selEst.id===est.id;
+      var icon=L.divIcon({className:"",html:'<div style="width:'+(isSE?18:12)+'px;height:'+(isSE?18:12)+'px;background:'+(isSE?'#E6A817':'#F5A623')+';border:2px solid '+(isSE?'#1A1A1A':'#E6A817')+';border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.2);"></div>',iconSize:[isSE?18:12,isSE?18:12],iconAnchor:[isSE?9:6,isSE?9:6]});
+      var m=L.marker([est.lat,est.lng],{icon:icon}).addTo(map);
+      m.bindTooltip('<div style="font-size:12px;font-weight:600;color:#1A1A1A;margin-bottom:2px">'+est.name+'</div><div style="font-size:10px;color:#E6A817">'+est.ha.toLocaleString()+' ha</div>',{direction:"top",offset:[0,-12],className:"dark-tt"});
+      m.on("click",function(){onEst(est);});marks.current.push(m);
+    });}
+  },[level,selProv,selEst,onProv,onEst]);
+  useEffect(function(){
+    var map=mapI.current;if(!map)return;
+    if(level==="establishment"&&selEst)map.flyTo([selEst.lat,selEst.lng],10,{duration:0.8});
+    else if(level==="province"&&selProv)map.flyTo([selProv.lat,selProv.lng],7,{duration:0.8});
+    else map.flyTo([-33.5,-63],5,{duration:0.8});
+  },[level,selProv,selEst]);
+  return(
+    <div style={{background:"#fff",border:"1px solid #E8E8E8",borderRadius:12,overflow:"hidden",position:"relative"}}>
+      <div ref={mapRef} style={{width:"100%",height:340}}></div>
+      <div style={{position:"absolute",top:10,left:10,zIndex:1000,background:"rgba(255,255,255,0.92)",borderRadius:6,padding:"4px 10px",fontSize:10,color:"#888",border:"1px solid #E0E0E0",pointerEvents:"none"}}>Click en provincia para drill-down</div>
+    </div>
+  );
+}
+
+/* ─── STYLES ─── */
+var ttS={background:"#fff",border:"1px solid #E0E0E0",borderRadius:8,fontSize:12,color:"#1A1A1A",boxShadow:"0 2px 8px rgba(0,0,0,0.08)"};
+function badge(c){return{display:"inline-block",width:10,height:10,borderRadius:"50%",background:c,marginRight:6,flexShrink:0};}
+
+function KPICard(p){
+  return(<div style={{background:"#fff",border:"1px solid #E8E8E8",borderRadius:10,padding:"18px 20px",borderLeft:"3px solid #1B7A4B"}}>
+    <div style={{fontSize:11,color:"#888",textTransform:"uppercase",letterSpacing:1,fontWeight:600,marginBottom:8}}>{p.label}</div>
+    <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+      <span style={{fontSize:28,fontWeight:800,color:"#1A1A1A",lineHeight:1}}>{p.value}</span>
+      <span style={{fontSize:13,color:"#888",fontWeight:400}}>{p.unit}</span>
+    </div>
+    {p.sub&&<div style={{fontSize:11,color:"#999",marginTop:4}}>{p.sub}</div>}
+    {p.delta!==undefined&&(<div style={{marginTop:6,display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:12,fontWeight:600,color:p.delta>=0?"#1B7A4B":"#E74C3C"}}>{p.delta>=0?"\u25B2":"\u25BC"} {Math.abs(p.delta)}%</span><span style={{fontSize:10,color:"#AAA"}}>{p.deltaLabel}</span></div>)}
+  </div>);
+}
+
+function CropChart(p){
+  return(<ResponsiveContainer width="100%" height={180}><AreaChart data={p.data[p.crop]||[]} margin={{top:5,right:10,left:-10,bottom:5}}><defs><linearGradient id={"g-"+p.crop} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CC[p.crop]} stopOpacity={0.2}/><stop offset="100%" stopColor={CC[p.crop]} stopOpacity={0.02}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0"/><XAxis dataKey="campaign" tick={{fontSize:10,fill:"#999"}}/><YAxis tick={{fontSize:10,fill:"#999"}}/><Tooltip contentStyle={ttS}/><Area type="monotone" dataKey="ha" stroke={CC[p.crop]} fill={"url(#g-"+p.crop+")"} strokeWidth={2} dot={{r:3,fill:CC[p.crop]}}/></AreaChart></ResponsiveContainer>);
+}
+function ValChart(p){
+  var cd=CAMPAIGNS.map(function(camp,i){var r={campaign:camp};CROPS.forEach(function(c){r[c]=((p.data[c]||[])[i]||{}).value||0;});return r;});
+  return(<ResponsiveContainer width="100%" height={220}><BarChart data={cd} margin={{top:5,right:10,left:-10,bottom:5}}><CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0"/><XAxis dataKey="campaign" tick={{fontSize:10,fill:"#999"}}/><YAxis tick={{fontSize:10,fill:"#999"}}/><Tooltip contentStyle={ttS} formatter={function(v){return["USD "+v+"M",""];}}/><Legend wrapperStyle={{fontSize:11,color:"#666"}}/>{CROPS.map(function(c){return <Bar key={c} dataKey={c} fill={CC[c]} radius={[3,3,0,0]}/>;})}</BarChart></ResponsiveContainer>);
+}
+function YldChart(p){
+  var cd=CROPS.map(function(crop){var r=p.data[crop]||[];return{crop:crop,"24/25":(r[4]||{}).yield||0,"25/26 (est.)":(r[5]||{}).yield||0};});
+  return(<ResponsiveContainer width="100%" height={200}><BarChart data={cd} layout="vertical" margin={{top:5,right:20,left:10,bottom:5}}><CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0"/><XAxis type="number" tick={{fontSize:10,fill:"#999"}} unit=" tn/ha"/><YAxis dataKey="crop" type="category" tick={{fontSize:11,fill:"#555"}} width={60}/><Tooltip contentStyle={ttS}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="24/25" fill="#1B7A4B" radius={[0,3,3,0]}/><Bar dataKey="25/26 (est.)" fill="#4CAF50" radius={[0,3,3,0]}/></BarChart></ResponsiveContainer>);
+}
+function FPie(p){
+  var pd=CROPS.map(function(crop){return{name:crop,value:((p.data[crop]||[])[5]||{}).ha||0,color:CC[crop]};});
+  return(<ResponsiveContainer width="100%" height={200}><PieChart><Pie data={pd} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value" label={function(e){return e.name+" "+(e.percent*100).toFixed(0)+"%";}} labelLine={{stroke:"#CCC"}}>{pd.map(function(entry,i){return <Cell key={i} fill={entry.color}/>;})}</Pie><Tooltip contentStyle={ttS} formatter={function(v){return[(v/1000).toFixed(0)+"k ha",""];}}/></PieChart></ResponsiveContainer>);
+}
+
+/* ─── APP ─── */
+function App(){
+  var _l=useState("country"),level=_l[0],setLevel=_l[1];
+  var _p=useState(null),selProv=_p[0],setSelProv=_p[1];
+  var _e=useState(null),selEst=_e[0],setSelEst=_e[1];
+  var _t=useState("overview"),tab=_t[0],setTab=_t[1];
+  var _c=useState("Soja"),crop=_c[0],setCrop=_c[1];
+
+  var data=useMemo(function(){if(level==="establishment"&&selEst)return estCache[selEst.id];if(level==="province"&&selProv)return provCache[selProv.id];return countryData;},[level,selProv,selEst]);
+  var eName=useMemo(function(){if(level==="establishment"&&selEst)return selEst.name;if(level==="province"&&selProv)return selProv.name;return "Argentina";},[level,selProv,selEst]);
+  var kpis=useMemo(function(){var thc=0,thf=0,tvc=0,tvf=0;CROPS.forEach(function(c){var r=data[c]||[];var cu=r[4]||{};var fu=r[5]||{};thc+=cu.ha||0;thf+=fu.ha||0;tvc+=cu.value||0;tvf+=fu.value||0;});return{totalHa:(thc/1000).toFixed(0),futureHa:(thf/1000).toFixed(0),haDelta:((thf-thc)/thc*100).toFixed(1),totalValue:tvc,futureValue:tvf,valueDelta:((tvf-tvc)/tvc*100).toFixed(1)};},[data]);
+
+  var pickProv=useCallback(function(p){setSelProv(p);setSelEst(null);setLevel("province");},[]);
+  var pickEst=useCallback(function(e){setSelEst(e);setLevel("establishment");},[]);
+  var goCountry=useCallback(function(){setLevel("country");setSelProv(null);setSelEst(null);},[]);
+  var goProv=useCallback(function(){setLevel("province");setSelEst(null);},[]);
+  useEffect(function(){var el=document.getElementById("loading");if(el)el.remove();},[]);
+
+  var cardS={background:"#fff",border:"1px solid #E8E8E8",borderRadius:12,padding:20,marginBottom:16};
+  var cardTS={fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14,display:"flex",alignItems:"center",gap:8};
+
+  return(
+    <div style={{fontFamily:"'Inter',sans-serif",background:"#F5F5F5",color:"#1A1A1A",minHeight:"100vh"}}>
+      {/* HEADER */}
+      <div style={{background:"#1B7A4B",padding:"0 24px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:30,height:30,background:"rgba(255,255,255,0.2)",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:"#fff",fontWeight:700}}>{"\u25B3"}</div>
+          <span style={{fontSize:16,fontWeight:700,color:"#fff",letterSpacing:0.5}}>Estimación de Oportunidad</span>
+        </div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>Campaña 2025/26 · Datos simulados</div>
+      </div>
+
+      {/* BREADCRUMB */}
+      <div style={{display:"flex",alignItems:"center",gap:6,padding:"10px 24px",fontSize:13,color:"#888",borderBottom:"1px solid #E8E8E8",background:"#fff"}}>
+        <span style={{cursor:"pointer",color:"#1B7A4B"}} onClick={goCountry}>Inicio</span>
+        <span style={{color:"#CCC"}}>{"\u203A"}</span>
+        <span style={{cursor:level!=="country"?"pointer":"default",color:level!=="country"?"#1B7A4B":"#555",fontWeight:level==="country"?600:400}} onClick={goCountry}>Seguimiento de Cartera</span>
+        {level!=="country"&&selProv&&<React.Fragment><span style={{color:"#CCC"}}>{"\u203A"}</span><span style={{cursor:level==="establishment"?"pointer":"default",color:level==="establishment"?"#1B7A4B":"#555",fontWeight:level!=="establishment"?600:400}} onClick={goProv}>{selProv.name}</span></React.Fragment>}
+        {level==="establishment"&&selEst&&<React.Fragment><span style={{color:"#CCC"}}>{"\u203A"}</span><span style={{color:"#555",fontWeight:600}}>{selEst.name}</span></React.Fragment>}
+      </div>
+
+      {/* MAIN */}
+      <div style={{display:"grid",gridTemplateColumns:"360px 1fr",gap:0,minHeight:"calc(100vh - 94px)"}}>
+        {/* SIDEBAR */}
+        <div style={{background:"#fff",borderRight:"1px solid #E8E8E8",padding:20,overflowY:"auto",maxHeight:"calc(100vh - 94px)"}}>
+          <MapView level={level} selectedProvince={selProv} selectedEst={selEst} onSelectProvince={pickProv} onSelectEstablishment={pickEst}/>
+          <div style={{marginTop:16}}>
+            <div style={cardTS}><span style={{fontSize:13}}>{"\uD83D\uDCCD"}</span>{level==="country"?"Provincias":level==="province"?"Establecimientos":"Detalle"}</div>
+            {level==="country"&&PROVINCES.map(function(p){var a=selProv&&selProv.id===p.id;return(<div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:8,cursor:"pointer",marginBottom:4,background:a?"#F0F9F4":"#FAFAFA",border:a?"1px solid #1B7A4B":"1px solid #F0F0F0",transition:"all 0.15s"}} onClick={function(){pickProv(p);}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:a?"#1B7A4B":"#CCC"}}></div>
+              <div><div style={{fontSize:13,fontWeight:600,color:"#1A1A1A"}}>{p.name}</div><div style={{fontSize:10,color:"#999"}}>{(ESTS[p.id]||[]).length} establec. · {(ESTS[p.id]||[]).reduce(function(a,e){return a+e.ha;},0).toLocaleString()} ha</div></div>
+            </div>);})}
+            {level==="province"&&selProv&&(ESTS[selProv.id]||[]).map(function(est){var a=selEst&&selEst.id===est.id;return(<div key={est.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:8,cursor:"pointer",marginBottom:4,background:a?"#FFF8E8":"#FAFAFA",border:a?"1px solid #E6A817":"1px solid #F0F0F0"}} onClick={function(){pickEst(est);}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:a?"#E6A817":"#CCC"}}></div>
+              <div><div style={{fontSize:13,fontWeight:600,color:"#1A1A1A"}}>{est.name}</div><div style={{fontSize:10,color:"#999"}}>{est.ha.toLocaleString()} ha</div></div>
+            </div>);})}
+            {level==="establishment"&&selEst&&(<div style={{background:"#F8FFF5",border:"1px solid #C8E6C9",borderRadius:10,padding:16}}>
+              <div style={{fontSize:15,fontWeight:700,color:"#1A1A1A",marginBottom:10}}>{selEst.name}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:12}}>
+                <div><span style={{color:"#999"}}>Superficie:</span> <span style={{color:"#1A1A1A",fontWeight:600}}>{selEst.ha.toLocaleString()} ha</span></div>
+                <div><span style={{color:"#999"}}>Provincia:</span> <span style={{color:"#1A1A1A",fontWeight:600}}>{selProv?selProv.name:""}</span></div>
+                <div><span style={{color:"#999"}}>Lat:</span> <span style={{color:"#555",fontFamily:"JetBrains Mono",fontSize:11}}>{selEst.lat}°</span></div>
+                <div><span style={{color:"#999"}}>Lng:</span> <span style={{color:"#555",fontFamily:"JetBrains Mono",fontSize:11}}>{selEst.lng}°</span></div>
+              </div>
+            </div>)}
+          </div>
+        </div>
+
+        {/* CONTENT */}
+        <div style={{padding:"20px 28px",overflowY:"auto",maxHeight:"calc(100vh - 94px)",background:"#F5F5F5"}}>
+          {/* Entity header */}
+          <div style={{background:"#fff",border:"1px solid #E8E8E8",borderRadius:12,padding:"18px 24px",marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{fontSize:18,fontWeight:700,color:"#1A1A1A"}}>{eName}</div>
+              <div style={{fontSize:12,color:"#999",marginTop:2}}>{level==="country"?"10 provincias · 16 establecimientos":level==="province"?(ESTS[selProv?selProv.id:""]||[]).length+" establecimientos":(selEst?selEst.ha:0).toLocaleString()+" ha"}</div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              {["overview","histórico","actual","futuro"].map(function(t){var a=tab===t;return <div key={t} style={{padding:"6px 16px",borderRadius:20,fontSize:12,fontWeight:500,cursor:"pointer",background:a?"#1B7A4B":"#F5F5F5",color:a?"#fff":"#666",border:a?"none":"1px solid #E0E0E0",transition:"all 0.15s"}} onClick={function(){setTab(t);}}>{t==="overview"?"Dashboard":t.charAt(0).toUpperCase()+t.slice(1)}</div>;})}
+            </div>
+          </div>
+
+          {/* KPIs */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
+            <KPICard label="Superficie Total" value={kpis.totalHa} unit="k ha" sub={eName} delta={parseFloat(kpis.haDelta)} deltaLabel="vs 23/24"/>
+            <KPICard label="Sup. Estimada 25/26" value={kpis.futureHa} unit="k ha" delta={parseFloat(kpis.haDelta)} deltaLabel="vs actual"/>
+            <KPICard label="Valor Actual" value={"USD "+kpis.totalValue.toLocaleString()} unit="" delta={parseFloat(kpis.valueDelta)} deltaLabel="vs 23/24"/>
+            <KPICard label="Valor Estimado" value={"USD "+kpis.futureValue.toLocaleString()} unit="" delta={parseFloat(kpis.valueDelta)} deltaLabel="vs actual"/>
+          </div>
+
+          {(tab==="overview"||tab==="histórico")&&(
+            <React.Fragment>
+              {/* Tabs - Datos que Sensamos style */}
+              <div style={{borderBottom:"2px solid #E8E8E8",marginBottom:20,display:"flex",gap:0}}>
+                {CROPS.map(function(c){var a=crop===c;return(<div key={c} onClick={function(){setCrop(c);}} style={{padding:"10px 18px",cursor:"pointer",fontSize:13,fontWeight:a?600:400,color:a?"#1B7A4B":"#888",borderBottom:a?"2px solid #1B7A4B":"2px solid transparent",marginBottom:-2,display:"flex",alignItems:"center",gap:6,transition:"all 0.15s"}}><span>{CI[c]}</span>{c}</div>);})}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+                <div style={cardS}><div style={cardTS}><span style={badge(CC[crop])}></span>Superficie {crop} · Evolución por Campaña</div><CropChart data={data} crop={crop}/></div>
+                <div style={cardS}><div style={cardTS}><span>{"\uD83D\uDCB0"}</span> Valor Estimado por Cultivo (USD M)</div><ValChart data={data}/></div>
+                <div style={cardS}><div style={cardTS}><span>{"\uD83D\uDCCA"}</span> Rinde Comparativo · Actual vs Estimado (tn/ha)</div><YldChart data={data}/></div>
+                <div style={cardS}><div style={cardTS}><span>{"\uD83D\uDD2E"}</span> Distribución Estimada 25/26</div><FPie data={data}/></div>
+              </div>
+            </React.Fragment>
+          )}
+
+          {(tab==="actual"||tab==="futuro")&&(
+            <div style={cardS}>
+              <div style={cardTS}><span>{tab==="actual"?"\uD83D\uDCCB":"\uD83D\uDD2E"}</span>{tab==="actual"?"Detalle Campaña 24/25":"Previsión 25/26"} · {eName}</div>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr>
+                {["Cultivo","Sup (ha)","Rinde (tn/ha)","Precio (USD/tn)","Valor (USD M)"].map(function(h,i){return <th key={h} style={{textAlign:i===0?"left":"right",padding:"10px 12px",fontSize:11,fontWeight:600,color:"#999",textTransform:"uppercase",letterSpacing:1,borderBottom:"2px solid #E8E8E8"}}>{h}</th>;})}
+              </tr></thead><tbody>
+                {CROPS.map(function(cr){var idx=tab==="actual"?4:5;var row=(data[cr]||[])[idx]||{};return(<tr key={cr} style={{borderBottom:"1px solid #F0F0F0"}}>
+                  <td style={{padding:"10px 12px"}}><span style={{display:"flex",alignItems:"center",gap:8}}><span style={badge(CC[cr])}></span><span style={{fontWeight:600}}>{CI[cr]} {cr}</span></span></td>
+                  <td style={{padding:"10px 12px",textAlign:"right",fontFamily:"JetBrains Mono",fontSize:12}}>{(row.ha||0).toLocaleString()}</td>
+                  <td style={{padding:"10px 12px",textAlign:"right",fontFamily:"JetBrains Mono",fontSize:12}}>{row.yield||0}</td>
+                  <td style={{padding:"10px 12px",textAlign:"right",fontFamily:"JetBrains Mono",fontSize:12}}>${row.price||0}</td>
+                  <td style={{padding:"10px 12px",textAlign:"right",fontWeight:700,fontFamily:"JetBrains Mono",fontSize:12}}>${row.value||0}M</td>
+                </tr>);})}
+              </tbody></table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

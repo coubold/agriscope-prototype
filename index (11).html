@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>AgriScope · Estimación de Oportunidad</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;0,9..40,800;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body,#root{width:100%;height:100%;background:#0B1A0F}
+  .dark-tt{background:rgba(11,26,15,0.95)!important;border:1px solid rgba(45,106,79,0.5)!important;border-radius:8px!important;padding:8px 12px!important;box-shadow:0 4px 20px rgba(0,0,0,0.5)!important;color:#D8F3DC!important;font-family:'DM Sans',sans-serif}
+  .dark-tt::before,.dark-tt::after{border-top-color:rgba(45,106,79,0.5)!important}
+  .leaflet-control-zoom a{background:rgba(13,40,24,0.9)!important;color:#74C69D!important;border-color:rgba(45,106,79,0.3)!important}
+  .leaflet-control-zoom a:hover{background:rgba(26,58,42,0.9)!important;color:#D8F3DC!important}
+  .leaflet-control-attribution{background:rgba(11,26,15,0.7)!important;color:#3A7D5E!important;font-size:9px!important}
+  .leaflet-control-attribution a{color:#5A8A6E!important}
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0B1A0F;color:#74C69D;font-family:'DM Sans',sans-serif;font-size:14px;z-index:9999;flex-direction:column;gap:12px}
+  #loading .spinner{width:32px;height:32px;border:3px solid rgba(45,106,79,0.3);border-top-color:#52B788;border-radius:50%;animation:spin 0.8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="loading"><div class="spinner"></div>Cargando AgriScope…</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useMemo, useCallback, useEffect, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line,
+        CartesianGrid, Legend, AreaChart, Area, PieChart, Pie, Cell } = Recharts;
+
+const CROPS = ["Soja", "Maíz", "Trigo", "Girasol", "Sorgo"];
+const CAMPAIGNS = ["20/21", "21/22", "22/23", "23/24", "24/25", "25/26 (est.)"];
+const CROP_COLORS = { Soja: "#2D6A4F", "Maíz": "#E9C46A", Trigo: "#D4A373", Girasol: "#F4A261", Sorgo: "#8B5E3C" };
+const CROP_ICONS = { Soja: "\u{1FAD8}", "Maíz": "\u{1F33D}", Trigo: "\u{1F33E}", Girasol: "\u{1F33B}", Sorgo: "\u{1F33F}" };
+
+const PROVINCES = [
+  { id: "BA", name: "Buenos Aires", lat: -36.6, lng: -60.0 },
+  { id: "CBA", name: "Córdoba", lat: -31.4, lng: -64.2 },
+  { id: "SF", name: "Santa Fe", lat: -31.6, lng: -60.7 },
+  { id: "ER", name: "Entre Ríos", lat: -32.0, lng: -59.2 },
+  { id: "LP", name: "La Pampa", lat: -36.6, lng: -65.5 },
+  { id: "SL", name: "San Luis", lat: -33.3, lng: -66.3 },
+  { id: "SGO", name: "Santiago del Estero", lat: -27.8, lng: -64.3 },
+  { id: "TUC", name: "Tucumán", lat: -26.8, lng: -65.2 },
+  { id: "CHA", name: "Chaco", lat: -27.4, lng: -59.0 },
+  { id: "SAL", name: "Salta", lat: -24.8, lng: -65.4 },
+];
+
+const ESTABLISHMENTS = {
+  BA: [
+    { id: "ba1", name: "Est. Los Alamos", ha: 2400, lat: -35.8, lng: -59.5 },
+    { id: "ba2", name: "Est. San Martín", ha: 1800, lat: -37.2, lng: -60.8 },
+    { id: "ba3", name: "Est. La Esperanza", ha: 3200, lat: -36.1, lng: -61.2 },
+  ],
+  CBA: [
+    { id: "cb1", name: "Est. El Porvenir", ha: 4100, lat: -31.8, lng: -63.5 },
+    { id: "cb2", name: "Est. Bella Vista", ha: 2700, lat: -32.5, lng: -64.8 },
+  ],
+  SF: [
+    { id: "sf1", name: "Est. Santa Rosa", ha: 1950, lat: -31.2, lng: -61.0 },
+    { id: "sf2", name: "Est. Don Pedro", ha: 3600, lat: -32.0, lng: -60.2 },
+  ],
+  ER: [{ id: "er1", name: "Est. La Calandria", ha: 2100, lat: -32.2, lng: -58.8 }],
+  LP: [{ id: "lp1", name: "Est. Pampa Grande", ha: 5200, lat: -36.4, lng: -65.0 }],
+  SL: [{ id: "sl1", name: "Est. Sierra Norte", ha: 1500, lat: -33.0, lng: -66.0 }],
+  SGO: [{ id: "sg1", name: "Est. El Quebracho", ha: 8500, lat: -28.0, lng: -64.0 }],
+  TUC: [{ id: "tu1", name: "Est. Tucumano", ha: 1200, lat: -27.0, lng: -65.5 }],
+  CHA: [{ id: "ch1", name: "Est. Chaco Norte", ha: 6000, lat: -27.2, lng: -59.5 }],
+  SAL: [{ id: "sa1", name: "Est. Salteño", ha: 4800, lat: -25.0, lng: -65.0 }],
+};
+
+function seededRandom(seed) {
+  let s = seed;
+  return function() { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+function generateCropData(entityId, scale) {
+  scale = scale || 1;
+  const rng = seededRandom(entityId.split("").reduce(function(a,c){return a+c.charCodeAt(0);},0));
+  const base = {};
+  CROPS.forEach(function(crop) {
+    const baseHa = (rng() * 40000 + 5000) * scale;
+    const baseYield = crop==="Soja"?2.8:crop==="Maíz"?8.5:crop==="Trigo"?3.2:crop==="Girasol"?2.0:4.5;
+    const basePrice = crop==="Soja"?320:crop==="Maíz"?180:crop==="Trigo"?250:crop==="Girasol"?380:160;
+    base[crop] = CAMPAIGNS.map(function(camp, i) {
+      const trend = 1 + (i * 0.03);
+      const variation = 0.85 + rng() * 0.3;
+      const ha = Math.round(baseHa * trend * variation);
+      const yld = +(baseYield * (0.8 + rng() * 0.4) * trend).toFixed(1);
+      const price = Math.round(basePrice * (0.85 + rng() * 0.3));
+      return { campaign: camp, ha: ha, yield: yld, price: price, value: Math.round(ha * yld * price / 1e6), isFuture: i >= 5 };
+    });
+  });
+  return base;
+}
+
+const countryData = generateCropData("ARG", 100);
+const provinceDataCache = {};
+PROVINCES.forEach(function(p) { provinceDataCache[p.id] = generateCropData(p.id, 10); });
+const estDataCache = {};
+Object.entries(ESTABLISHMENTS).forEach(function(entry) {
+  entry[1].forEach(function(e) { estDataCache[e.id] = generateCropData(e.id, 0.3); });
+});
+
+/* ─── LEAFLET MAP ─── */
+function LeafletMap({ level, selectedProvince, selectedEst, onSelectProvince, onSelectEstablishment }) {
+  const mapRef = useRef(null);
+  const mapI = useRef(null);
+  const markers = useRef([]);
+
+  useEffect(function() {
+    if (!mapRef.current || mapI.current) return;
+    const map = L.map(mapRef.current, { center: [-33.5,-63], zoom: 5, zoomControl: false, attributionControl: false });
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 18 }).addTo(map);
+    L.control.zoom({ position: "bottomright" }).addTo(map);
+    mapI.current = map;
+    setTimeout(function() { map.invalidateSize(); }, 300);
+    return function() { map.remove(); mapI.current = null; };
+  }, []);
+
+  useEffect(function() {
+    const map = mapI.current;
+    if (!map) return;
+    markers.current.forEach(function(m) { map.removeLayer(m); });
+    markers.current = [];
+
+    PROVINCES.forEach(function(prov) {
+      const isSel = selectedProvince && selectedProvince.id === prov.id;
+      const ests = ESTABLISHMENTS[prov.id] || [];
+      const totalHa = ests.reduce(function(a,e){return a+e.ha;},0);
+      const m = L.circleMarker([prov.lat, prov.lng], {
+        radius: isSel?12:8, fillColor: isSel?"#52B788":"#40916C",
+        color: isSel?"#D8F3DC":"#2D6A4F", weight: isSel?3:1.5, opacity: 1, fillOpacity: isSel?0.9:0.7,
+      }).addTo(map);
+      m.bindTooltip('<div style="font-size:12px;font-weight:700;color:#D8F3DC;margin-bottom:2px">'+prov.name+'</div><div style="font-size:10px;color:#74C69D">'+ests.length+' establec. \u00b7 '+totalHa.toLocaleString()+' ha</div>',{direction:"top",offset:[0,-10],className:"dark-tt"});
+      m.on("click", function() { onSelectProvince(prov); });
+      markers.current.push(m);
+    });
+
+    if (level !== "country" && selectedProvince) {
+      (ESTABLISHMENTS[selectedProvince.id]||[]).forEach(function(est) {
+        const isSE = selectedEst && selectedEst.id === est.id;
+        const icon = L.divIcon({
+          className: "",
+          html: '<div style="width:'+(isSE?20:14)+'px;height:'+(isSE?20:14)+'px;background:'+(isSE?'#E9C46A':'#F4A261')+';border:2px solid '+(isSE?'#D8F3DC':'#E9C46A')+';border-radius:3px;transform:rotate(45deg);box-shadow:0 0 '+(isSE?12:6)+'px '+(isSE?'#E9C46A88':'#F4A26144')+';"></div>',
+          iconSize: [isSE?20:14,isSE?20:14], iconAnchor: [isSE?10:7,isSE?10:7],
+        });
+        const m = L.marker([est.lat,est.lng],{icon:icon}).addTo(map);
+        m.bindTooltip('<div style="font-size:12px;font-weight:700;color:#D8F3DC;margin-bottom:2px">'+est.name+'</div><div style="font-size:10px;color:#E9C46A">'+est.ha.toLocaleString()+' ha</div>',{direction:"top",offset:[0,-12],className:"dark-tt"});
+        m.on("click", function() { onSelectEstablishment(est); });
+        markers.current.push(m);
+      });
+    }
+  }, [level, selectedProvince, selectedEst, onSelectProvince, onSelectEstablishment]);
+
+  useEffect(function() {
+    const map = mapI.current;
+    if (!map) return;
+    if (level==="establishment"&&selectedEst) map.flyTo([selectedEst.lat,selectedEst.lng],10,{duration:0.8});
+    else if (level==="province"&&selectedProvince) map.flyTo([selectedProvince.lat,selectedProvince.lng],7,{duration:0.8});
+    else map.flyTo([-33.5,-63],5,{duration:0.8});
+  }, [level, selectedProvince, selectedEst]);
+
+  return (
+    <div style={{ background:"rgba(11,26,15,0.8)", border:"1px solid rgba(45,106,79,0.3)", borderRadius:12, overflow:"hidden", position:"relative" }}>
+      <div ref={mapRef} style={{ width:"100%", height:340 }}/>
+      <div style={{ position:"absolute",top:10,left:10,zIndex:1000,background:"rgba(11,26,15,0.9)",borderRadius:6,padding:"4px 8px",fontSize:9,color:"#5A8A6E",border:"1px solid rgba(45,106,79,0.3)",pointerEvents:"none" }}>
+        Click en provincia para drill-down
+      </div>
+    </div>
+  );
+}
+
+/* ─── STYLES ─── */
+const S = {
+  app: { fontFamily:"'DM Sans','Helvetica Neue',sans-serif", background:"#0B1A0F", color:"#E8E6E1", minHeight:"100vh" },
+  header: { background:"linear-gradient(135deg,#0D2818 0%,#1A3A2A 50%,#0D2818 100%)", borderBottom:"1px solid rgba(45,106,79,0.4)", padding:"16px 24px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, backdropFilter:"blur(12px)" },
+  logo: { display:"flex", alignItems:"center", gap:12 },
+  logoMark: { width:36,height:36,background:"linear-gradient(135deg,#40916C,#2D6A4F)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:16,color:"#fff",letterSpacing:-1 },
+  bc: { display:"flex",alignItems:"center",gap:8,padding:"12px 24px",fontSize:13,color:"#74C69D",borderBottom:"1px solid rgba(45,106,79,0.2)",background:"rgba(13,40,24,0.6)" },
+  main: { display:"grid",gridTemplateColumns:"380px 1fr",gap:0,minHeight:"calc(100vh - 110px)" },
+  side: { background:"rgba(13,40,24,0.4)",borderRight:"1px solid rgba(45,106,79,0.2)",padding:20,overflowY:"auto",maxHeight:"calc(100vh - 110px)" },
+  content: { padding:"20px 24px",overflowY:"auto",maxHeight:"calc(100vh - 110px)" },
+  card: { background:"rgba(26,58,42,0.5)",border:"1px solid rgba(45,106,79,0.3)",borderRadius:12,padding:20,marginBottom:16 },
+  cardT: { fontSize:11,fontWeight:700,color:"#74C69D",textTransform:"uppercase",letterSpacing:2,marginBottom:14,display:"flex",alignItems:"center",gap:8 },
+  table: { width:"100%",borderCollapse:"separate",borderSpacing:"0 4px",fontSize:13 },
+  th: { textAlign:"left",padding:"8px 10px",fontSize:10,fontWeight:700,color:"#74C69D",textTransform:"uppercase",letterSpacing:1.5,borderBottom:"1px solid rgba(45,106,79,0.3)" },
+  td: { padding:"8px 10px",borderBottom:"1px solid rgba(45,106,79,0.1)" },
+  futR: { background:"rgba(45,106,79,0.15)",borderLeft:"3px solid #52B788" },
+  kpiStrip: { display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20 },
+  kpiCard: { background:"rgba(26,58,42,0.5)",border:"1px solid rgba(45,106,79,0.3)",borderRadius:10,padding:"14px 16px",position:"relative",overflow:"hidden" },
+  kpiAccent: { position:"absolute",top:0,left:0,width:3,height:"100%",background:"#52B788",borderRadius:"10px 0 0 10px" },
+};
+
+function navPill(a){return{padding:"6px 16px",borderRadius:20,fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.2s",background:a?"#2D6A4F":"transparent",color:a?"#fff":"#74C69D",border:a?"1px solid #40916C":"1px solid transparent",letterSpacing:0.5};}
+function bcItem(cl){return{cursor:cl?"pointer":"default",color:cl?"#74C69D":"#D8F3DC",fontWeight:cl?400:600,transition:"color 0.2s"};}
+function selBtn(a){return{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:8,cursor:"pointer",transition:"all 0.2s",marginBottom:6,width:"100%",background:a?"rgba(45,106,79,0.5)":"rgba(26,58,42,0.3)",border:a?"1px solid #40916C":"1px solid rgba(45,106,79,0.15)"};}
+function badge(c){return{display:"inline-block",width:10,height:10,borderRadius:"50%",background:c,marginRight:6,flexShrink:0};}
+const ttS={background:"#0D2818",border:"1px solid #2D6A4F",borderRadius:8,fontSize:12,color:"#D8F3DC"};
+
+/* ─── COMPONENTS ─── */
+function KPICard({label,value,unit,delta,deltaLabel}){
+  const pos=delta>=0;
+  return(<div style={S.kpiCard}><div style={S.kpiAccent}/><div style={{fontSize:10,color:"#74C69D",textTransform:"uppercase",letterSpacing:1.5,fontWeight:700,marginBottom:8}}>{label}</div><div style={{display:"flex",alignItems:"baseline",gap:4}}><span style={{fontSize:26,fontWeight:800,color:"#D8F3DC",lineHeight:1}}>{value}</span><span style={{fontSize:12,color:"#74C69D",fontWeight:500}}>{unit}</span></div>{delta!==undefined&&(<div style={{marginTop:6,display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:12,fontWeight:700,color:pos?"#52B788":"#E76F51"}}>{pos?"▲":"▼"} {Math.abs(delta)}%</span><span style={{fontSize:10,color:"#5A8A6E"}}>{deltaLabel}</span></div>)}</div>);
+}
+
+function CropHistoryChart({data,crop}){
+  return(<ResponsiveContainer width="100%" height={180}><AreaChart data={data[crop]||[]} margin={{top:5,right:10,left:-10,bottom:5}}><defs><linearGradient id={"g-"+crop} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CROP_COLORS[crop]} stopOpacity={0.4}/><stop offset="100%" stopColor={CROP_COLORS[crop]} stopOpacity={0.05}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="rgba(45,106,79,0.2)"/><XAxis dataKey="campaign" tick={{fontSize:10,fill:"#74C69D"}} axisLine={{stroke:"rgba(45,106,79,0.3)"}}/><YAxis tick={{fontSize:10,fill:"#74C69D"}} axisLine={{stroke:"rgba(45,106,79,0.3)"}}/><Tooltip contentStyle={ttS}/><Area type="monotone" dataKey="ha" stroke={CROP_COLORS[crop]} fill={"url(#g-"+crop+")"} strokeWidth={2} dot={{r:3,fill:CROP_COLORS[crop]}}/></AreaChart></ResponsiveContainer>);
+}
+
+function ValueChart({data}){
+  const cd=CAMPAIGNS.map(function(camp,i){var r={campaign:camp};CROPS.forEach(function(c){r[c]=((data[c]||[])[i]||{}).value||0;});return r;});
+  return(<ResponsiveContainer width="100%" height={220}><BarChart data={cd} margin={{top:5,right:10,left:-10,bottom:5}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(45,106,79,0.2)"/><XAxis dataKey="campaign" tick={{fontSize:10,fill:"#74C69D"}}/><YAxis tick={{fontSize:10,fill:"#74C69D"}}/><Tooltip contentStyle={ttS} formatter={function(v){return["USD "+v+"M",""];}}/><Legend wrapperStyle={{fontSize:11,color:"#74C69D"}}/>{CROPS.map(function(c){return <Bar key={c} dataKey={c} fill={CROP_COLORS[c]} radius={[3,3,0,0]}/>;})}</BarChart></ResponsiveContainer>);
+}
+
+function YieldChart({data}){
+  const cd=CROPS.map(function(crop){var r=data[crop]||[];return{crop:crop,"24/25":(r[4]||{}).yield||0,"25/26 (est.)":(r[5]||{}).yield||0};});
+  return(<ResponsiveContainer width="100%" height={200}><BarChart data={cd} layout="vertical" margin={{top:5,right:20,left:10,bottom:5}}><CartesianGrid strokeDasharray="3 3" stroke="rgba(45,106,79,0.2)"/><XAxis type="number" tick={{fontSize:10,fill:"#74C69D"}} unit=" tn/ha"/><YAxis dataKey="crop" type="category" tick={{fontSize:11,fill:"#D8F3DC"}} width={60}/><Tooltip contentStyle={ttS}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="24/25" fill="#2D6A4F" radius={[0,3,3,0]}/><Bar dataKey="25/26 (est.)" fill="#52B788" radius={[0,3,3,0]}/></BarChart></ResponsiveContainer>);
+}
+
+function FuturePie({data}){
+  const pd=CROPS.map(function(crop){return{name:crop,value:((data[crop]||[])[5]||{}).ha||0,color:CROP_COLORS[crop]};});
+  return(<ResponsiveContainer width="100%" height={200}><PieChart><Pie data={pd} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value" label={function(e){return e.name+" "+(e.percent*100).toFixed(0)+"%";}} labelLine={{stroke:"#5A8A6E"}}>{pd.map(function(entry,i){return <Cell key={i} fill={entry.color}/>;})}</Pie><Tooltip contentStyle={ttS} formatter={function(v){return[(v/1000).toFixed(0)+"k ha",""];}}/></PieChart></ResponsiveContainer>);
+}
+
+/* ─── MAIN APP ─── */
+function App(){
+  const [level,setLevel]=useState("country");
+  const [selProv,setSelProv]=useState(null);
+  const [selEst,setSelEst]=useState(null);
+  const [tab,setTab]=useState("overview");
+  const [crop,setCrop]=useState("Soja");
+
+  const data=useMemo(function(){
+    if(level==="establishment"&&selEst) return estDataCache[selEst.id];
+    if(level==="province"&&selProv) return provinceDataCache[selProv.id];
+    return countryData;
+  },[level,selProv,selEst]);
+
+  const name=useMemo(function(){
+    if(level==="establishment"&&selEst) return selEst.name;
+    if(level==="province"&&selProv) return selProv.name;
+    return "Argentina";
+  },[level,selProv,selEst]);
+
+  const kpis=useMemo(function(){
+    var thc=0,thf=0,tvc=0,tvf=0;
+    CROPS.forEach(function(c){var r=data[c]||[];var cu=r[4]||{};var fu=r[5]||{};thc+=cu.ha||0;thf+=fu.ha||0;tvc+=cu.value||0;tvf+=fu.value||0;});
+    return{totalHa:(thc/1000).toFixed(0),futureHa:(thf/1000).toFixed(0),haDelta:((thf-thc)/thc*100).toFixed(1),totalValue:tvc,futureValue:tvf,valueDelta:((tvf-tvc)/tvc*100).toFixed(1)};
+  },[data]);
+
+  const pickProv=useCallback(function(p){setSelProv(p);setSelEst(null);setLevel("province");},[]);
+  const pickEst=useCallback(function(e){setSelEst(e);setLevel("establishment");},[]);
+  const goCountry=useCallback(function(){setLevel("country");setSelProv(null);setSelEst(null);},[]);
+  const goProv=useCallback(function(){setLevel("province");setSelEst(null);},[]);
+
+  useEffect(function(){var el=document.getElementById("loading");if(el)el.remove();},[]);
+
+  return(
+    <div style={S.app}>
+      <div style={S.header}>
+        <div style={S.logo}>
+          <div style={S.logoMark}>AG</div>
+          <div><div style={{fontSize:18,fontWeight:700,color:"#D8F3DC",letterSpacing:2,textTransform:"uppercase"}}>AgriScope</div><div style={{fontSize:10,color:"#74C69D",letterSpacing:3,textTransform:"uppercase",marginTop:2}}>Estimación de Oportunidad</div></div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {["overview","histórico","actual","futuro"].map(function(t){return <div key={t} style={navPill(tab===t)} onClick={function(){setTab(t);}}>{t==="overview"?"Dashboard":t.charAt(0).toUpperCase()+t.slice(1)}</div>;})}
+        </div>
+        <div style={{fontSize:11,color:"#5A8A6E"}}>Campaña 25/26 · Datos simulados</div>
+      </div>
+
+      <div style={S.bc}>
+        <span style={bcItem(level!=="country")} onClick={goCountry}>🌎 Argentina</span>
+        {level!=="country"&&selProv&&<><span style={{color:"#3A7D5E"}}>/</span><span style={bcItem(level==="establishment")} onClick={goProv}>{selProv.name}</span></>}
+        {level==="establishment"&&selEst&&<><span style={{color:"#3A7D5E"}}>/</span><span style={bcItem(false)}>{selEst.name}</span></>}
+        <span style={{marginLeft:"auto",fontSize:11,color:"#5A8A6E",display:"flex",alignItems:"center",gap:4}}>
+          <span style={{width:6,height:6,borderRadius:"50%",background:"#52B788",display:"inline-block"}}/>
+          {level==="country"?"10 provincias · 16 establecimientos":level==="province"?(ESTABLISHMENTS[selProv&&selProv.id]||[]).length+" establecimientos":(selEst?selEst.ha:0).toLocaleString()+" ha"}
+        </span>
+      </div>
+
+      <div style={S.main}>
+        <div style={S.side}>
+          <LeafletMap level={level} selectedProvince={selProv} selectedEst={selEst} onSelectProvince={pickProv} onSelectEstablishment={pickEst}/>
+          <div style={{marginTop:16}}>
+            <div style={S.cardT}><span style={{fontSize:13}}>📍</span>{level==="country"?"Provincias":level==="province"?"Establecimientos":"Detalle"}</div>
+            {level==="country"&&PROVINCES.map(function(p){return(<div key={p.id} style={selBtn(selProv&&selProv.id===p.id)} onClick={function(){pickProv(p);}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:selProv&&selProv.id===p.id?"#52B788":"#3A7D5E"}}/>
+              <div><div style={{fontSize:13,fontWeight:600,color:"#D8F3DC"}}>{p.name}</div><div style={{fontSize:10,color:"#5A8A6E"}}>{(ESTABLISHMENTS[p.id]||[]).length} establec. · {(ESTABLISHMENTS[p.id]||[]).reduce(function(a,e){return a+e.ha;},0).toLocaleString()} ha</div></div>
+            </div>);})}
+            {level==="province"&&selProv&&(ESTABLISHMENTS[selProv.id]||[]).map(function(est){return(<div key={est.id} style={selBtn(selEst&&selEst.id===est.id)} onClick={function(){pickEst(est);}}>
+              <div style={{width:8,height:8,borderRadius:2,background:selEst&&selEst.id===est.id?"#E9C46A":"#5A8A6E"}}/>
+              <div><div style={{fontSize:13,fontWeight:600,color:"#D8F3DC"}}>{est.name}</div><div style={{fontSize:10,color:"#5A8A6E"}}>{est.ha.toLocaleString()} ha</div></div>
+            </div>);})}
+            {level==="establishment"&&selEst&&(
+              <div style={{...S.card,background:"rgba(45,106,79,0.2)"}}>
+                <div style={{fontSize:15,fontWeight:700,color:"#D8F3DC",marginBottom:8}}>{selEst.name}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:12}}>
+                  <div><span style={{color:"#5A8A6E"}}>Superficie:</span> <span style={{color:"#D8F3DC",fontWeight:600}}>{selEst.ha.toLocaleString()} ha</span></div>
+                  <div><span style={{color:"#5A8A6E"}}>Provincia:</span> <span style={{color:"#D8F3DC",fontWeight:600}}>{selProv&&selProv.name}</span></div>
+                  <div><span style={{color:"#5A8A6E"}}>Lat:</span> <span style={{color:"#74C69D",fontFamily:"JetBrains Mono",fontSize:11}}>{selEst.lat}°</span></div>
+                  <div><span style={{color:"#5A8A6E"}}>Lng:</span> <span style={{color:"#74C69D",fontFamily:"JetBrains Mono",fontSize:11}}>{selEst.lng}°</span></div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={S.content}>
+          <div style={S.kpiStrip}>
+            <KPICard label="Sup. Total Actual" value={kpis.totalHa} unit="k ha" delta={parseFloat(kpis.haDelta)} deltaLabel="vs 23/24"/>
+            <KPICard label="Sup. Estimada 25/26" value={kpis.futureHa} unit="k ha" delta={parseFloat(kpis.haDelta)} deltaLabel="vs actual"/>
+            <KPICard label="Valor Actual" value={kpis.totalValue} unit="USD M" delta={parseFloat(kpis.valueDelta)} deltaLabel="vs 23/24"/>
+            <KPICard label="Valor Estimado" value={kpis.futureValue} unit="USD M" delta={parseFloat(kpis.valueDelta)} deltaLabel="vs actual"/>
+          </div>
+
+          {(tab==="overview"||tab==="histórico")&&(<>
+            <div style={{display:"flex",gap:6,marginBottom:16}}>
+              {CROPS.map(function(c){return(<div key={c} onClick={function(){setCrop(c);}} style={{padding:"6px 14px",borderRadius:8,cursor:"pointer",background:crop===c?CROP_COLORS[c]+"33":"rgba(26,58,42,0.3)",border:crop===c?"1px solid "+CROP_COLORS[c]:"1px solid rgba(45,106,79,0.15)",fontSize:12,fontWeight:600,color:crop===c?"#D8F3DC":"#5A8A6E",display:"flex",alignItems:"center",gap:6,transition:"all 0.2s"}}><span>{CROP_ICONS[c]}</span>{c}</div>);})}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              <div style={S.card}><div style={S.cardT}><span style={badge(CROP_COLORS[crop])}/>Superficie {crop} · Evolución por Campaña</div><CropHistoryChart data={data} crop={crop}/></div>
+              <div style={S.card}><div style={S.cardT}><span>💰</span> Valor Estimado por Cultivo (USD M)</div><ValueChart data={data}/></div>
+              <div style={S.card}><div style={S.cardT}><span>📊</span> Rinde Comparativo · Actual vs Estimado (tn/ha)</div><YieldChart data={data}/></div>
+              <div style={S.card}><div style={S.cardT}><span>🔮</span> Distribución Estimada 25/26</div><FuturePie data={data}/></div>
+            </div>
+          </>)}
+
+          {(tab==="actual"||tab==="futuro")&&(<>
+            <div style={S.card}>
+              <div style={S.cardT}><span>{tab==="actual"?"📋":"🔮"}</span>{tab==="actual"?"Detalle Campaña Actual 24/25":"Previsión de Siembra 25/26"} · {name}</div>
+              <table style={S.table}><thead><tr>
+                <th style={S.th}>Cultivo</th><th style={{...S.th,textAlign:"right"}}>Superficie (ha)</th><th style={{...S.th,textAlign:"right"}}>Rinde (tn/ha)</th><th style={{...S.th,textAlign:"right"}}>Precio (USD/tn)</th><th style={{...S.th,textAlign:"right"}}>Valor (USD M)</th><th style={{...S.th,textAlign:"right"}}>Δ vs 23/24</th>
+              </tr></thead><tbody>
+                {CROPS.map(function(cr){
+                  var idx=tab==="actual"?4:5;var row=(data[cr]||[])[idx]||{};var prev=(data[cr]||[])[idx-1]||{};var delta=prev.ha?((row.ha-prev.ha)/prev.ha*100).toFixed(1):0;
+                  return(<tr key={cr} style={tab==="futuro"?S.futR:{}}>
+                    <td style={S.td}><span style={{display:"flex",alignItems:"center",gap:8}}><span style={badge(CROP_COLORS[cr])}/><span style={{fontWeight:600}}>{CROP_ICONS[cr]} {cr}</span></span></td>
+                    <td style={{...S.td,textAlign:"right",fontFamily:"JetBrains Mono",fontSize:12}}>{(row.ha||0).toLocaleString()}</td>
+                    <td style={{...S.td,textAlign:"right",fontFamily:"JetBrains Mono",fontSize:12}}>{row.yield||0}</td>
+                    <td style={{...S.td,textAlign:"right",fontFamily:"JetBrains Mono",fontSize:12}}>${row.price||0}</td>
+                    <td style={{...S.td,textAlign:"right",fontWeight:700,fontFamily:"JetBrains Mono",fontSize:12}}>${row.value||0}M</td>
+                    <td style={{...S.td,textAlign:"right"}}><span style={{fontWeight:700,fontSize:12,color:delta>=0?"#52B788":"#E76F51"}}>{delta>=0?"▲":"▼"} {Math.abs(delta)}%</span></td>
+                  </tr>);
+                })}
+              </tbody></table>
+            </div>
+            {tab==="futuro"&&(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginTop:16}}>
+                <div style={S.card}>
+                  <div style={S.cardT}><span>📈</span> Proyección de Superficie</div>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={CAMPAIGNS.map(function(camp,i){var r={campaign:camp};CROPS.forEach(function(c){r[c]=((data[c]||[])[i]||{}).ha||0;});return r;})}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(45,106,79,0.2)"/><XAxis dataKey="campaign" tick={{fontSize:10,fill:"#74C69D"}}/><YAxis tick={{fontSize:10,fill:"#74C69D"}}/><Tooltip contentStyle={ttS}/>
+                      {CROPS.map(function(c){return <Line key={c} type="monotone" dataKey={c} stroke={CROP_COLORS[c]} strokeWidth={2} dot={{r:3}}/>;  })}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div style={S.card}>
+                  <div style={S.cardT}><span>🎯</span> Oportunidad por Cultivo</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {CROPS.map(function(cr){
+                      var cu=(data[cr]||[])[4]||{};var fu=(data[cr]||[])[5]||{};var opp=(fu.value||0)-(cu.value||0);var pct=cu.value?((opp/cu.value)*100).toFixed(0):0;
+                      return(<div key={cr} style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{width:80,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}><span style={badge(CROP_COLORS[cr])}/>{cr}</span>
+                        <div style={{flex:1,height:24,background:"rgba(11,26,15,0.6)",borderRadius:4,overflow:"hidden",position:"relative"}}>
+                          <div style={{height:"100%",width:Math.min(Math.abs(pct),100)+"%",background:opp>=0?"linear-gradient(90deg,"+CROP_COLORS[cr]+"88,"+CROP_COLORS[cr]+")":"linear-gradient(90deg,#E76F5188,#E76F51)",borderRadius:4,transition:"width 0.5s"}}/>
+                          <span style={{position:"absolute",right:8,top:4,fontSize:10,fontWeight:700,color:"#D8F3DC",fontFamily:"JetBrains Mono"}}>{opp>=0?"+":""}{opp} USD M ({pct}%)</span>
+                        </div>
+                      </div>);
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
